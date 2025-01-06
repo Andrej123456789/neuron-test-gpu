@@ -1,0 +1,6 @@
+.vs/*
+neuron-test-gpu/
+x64/
+
+neuron-test-gpu.vcxproj
+neuron-test-gpu.vcxproj.user
