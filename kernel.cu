@@ -21,18 +21,48 @@ typedef struct layer_T
 	Neuron* neurons;
 } Layer;
 
+__global__ void multiplyLayers(Layer* starting_layer, Layer* last_layer)
+{
+	int i = threadIdx.x;
+
+	Neuron neuron = starting_layer->neurons[i];
+
+	last_layer->neurons[0].value += neuron.value * neuron.weights[0];
+	last_layer->neurons[1].value += neuron.value * neuron.weights[1];
+
+	return;
+}
+
 void main_function(const char* content)
 {
-	Layer starting_layer;
-	Layer last_layer;
+	Layer* starting_layer = (Layer*)malloc(sizeof(Layer));
+	Layer* last_layer = (Layer*)malloc(sizeof(Layer));
+
+	if (starting_layer == NULL || last_layer == NULL)
+	{
+		printf("Malloc error!\n");
+		return;
+	}
 
 	// ----------------------------------------------------
 
-	starting_layer.neurons = (Neuron*)malloc(sizeof(Neuron) * 4);
-	last_layer.neurons = (Neuron*)malloc(sizeof(Neuron) * 2);
+	starting_layer->neurons = (Neuron*)malloc(sizeof(Neuron) * 4);
+	last_layer->neurons = (Neuron*)malloc(sizeof(Neuron) * 2);
 
-	last_layer.neurons[0].value = 0.0;
-	last_layer.neurons[1].value = 0.0;
+	if (starting_layer->neurons == NULL || last_layer->neurons == NULL)
+	{
+		printf("Malloc error!\n");
+		return;
+	}
+
+	last_layer->neurons[0].value = 0.0;
+	last_layer->neurons[1].value = 0.0;
+
+	last_layer->neurons[0].weights = NULL;
+	last_layer->neurons[1].weights = NULL;
+
+	last_layer->neurons[0].connected_to = NULL;
+	last_layer->neurons[1].connected_to = NULL;
 
 	for (size_t i = 0; i < strlen(content); i++)
 	{
@@ -46,29 +76,41 @@ void main_function(const char* content)
 		neuron.weights[0] = weight1; neuron.weights[1] = weight2;
 
 		neuron.connected_to = (Neuron*)malloc(sizeof(Neuron) * 2);
-		neuron.connected_to[0] = last_layer.neurons[0];  neuron.connected_to[1] = last_layer.neurons[1];
+		neuron.connected_to[0] = last_layer->neurons[0];  neuron.connected_to[1] = last_layer->neurons[1];
 
-		starting_layer.neurons[i] = neuron;
+		starting_layer->neurons[i] = neuron;
 	}
 
 	// ----------------------------------------------------
 
-	for (size_t i = 0; i < 4; i++)
+	Layer* cuda_starting_layer;
+	Layer* cuda_last_layer;
+
+	cudaMalloc(&cuda_starting_layer, sizeof(Layer));
+	cudaMalloc(&cuda_last_layer, sizeof(Layer));
+
+	cudaMemcpy(cuda_starting_layer, starting_layer, sizeof(Layer), cudaMemcpyHostToDevice);
+	cudaMemcpy(cuda_last_layer, last_layer, sizeof(Layer), cudaMemcpyHostToDevice);
+
+	/* for (size_t i = 0; i < 4; i++)
 	{
-		Neuron neuron = starting_layer.neurons[i];
+		Neuron neuron = starting_layer->neurons[i];
 
-		last_layer.neurons[0].value += neuron.value * neuron.weights[0];
-		last_layer.neurons[1].value += neuron.value * neuron.weights[1];
-	}
+		last_layer->neurons[0].value += neuron.value * neuron.weights[0];
+		last_layer->neurons[1].value += neuron.value * neuron.weights[1];
+	} */
+
+	multiplyLayers <<< 1, 4 >>> (cuda_starting_layer, cuda_last_layer);
+	cudaMemcpy(last_layer, cuda_last_layer, sizeof(Layer), cudaMemcpyDeviceToHost);
 
 	// ----------------------------------------------------
 
-	if (last_layer.neurons[0].value == 1)
+	if (last_layer->neurons[0].value == 1)
 	{
 		printf("Left white diagonal.\n");
 	}
 
-	else if (last_layer.neurons[1].value == 1)
+	else if (last_layer->neurons[1].value == 1)
 	{
 		printf("Right white diagonal.\n");
 	}
@@ -78,19 +120,22 @@ void main_function(const char* content)
 		printf("No diagonal.\n");
 	}
 
-	printf("Neuron 0: %.2f\n", last_layer.neurons[0].value);
-	printf("Neuron 0: %.2f\n", last_layer.neurons[1].value);
+	printf("Neuron 0: %.2f\n", last_layer->neurons[0].value);
+	printf("Neuron 0: %.2f\n", last_layer->neurons[1].value);
 
 	// ----------------------------------------------------
 
 	for (size_t i = 0; i < 4; i++)
 	{
-		free(starting_layer.neurons[i].weights);
-		free(starting_layer.neurons[i].connected_to);
+		free(starting_layer->neurons[i].weights);
+		free(starting_layer->neurons[i].connected_to);
 	}
 
-	free(starting_layer.neurons);
-	free(last_layer.neurons);
+	free(starting_layer->neurons);
+	free(last_layer->neurons);
+
+	free(starting_layer);
+	free(last_layer);
 }
 
 int main(int argc, char* argv[])
