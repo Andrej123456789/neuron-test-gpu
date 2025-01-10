@@ -141,7 +141,7 @@ int main(int argc, char* argv[])
 			i++;
 			if (i >= DEFAULT_SIZE)
 			{
-				char* temp = (char*)malloc(sizeof(char) * DEFAULT_SIZE);
+				char* temp = (char*)malloc(sizeof(char) * (i - 1) + 1);
 				if (temp == NULL)
 				{
 					printf("Malloc error!\n");
@@ -158,6 +158,7 @@ int main(int argc, char* argv[])
 				}
 
 				strcpy(content, temp);
+				free(temp);
 			}
 
 			content[i] = c;
