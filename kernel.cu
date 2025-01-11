@@ -7,110 +7,141 @@
 #include <string.h>
 
 #define DEFAULT_SIZE 5
+#define LAYERS_IN_NETWORK 2
 
-typedef struct neuron_T Neuron;
 typedef struct neuron_T
 {
 	float value;
 	float* weights;
-	Neuron* connected_to;
+	size_t weights_len;
 } Neuron;
 
 typedef struct layer_T
 {
 	Neuron* neurons;
+	size_t neurons_len;
 } Layer;
 
-__global__ void multiplyLayers(Layer* starting_layer, Layer* last_layer)
+__global__ void multiplyLayers(Layer* first_layer, Layer* second_layer)
 {
 	int i = threadIdx.x;
+	int j = threadIdx.y;
 
-	Neuron neuron = starting_layer->neurons[i];
-
-	last_layer->neurons[0].value += neuron.value * neuron.weights[0];
-	last_layer->neurons[1].value += neuron.value * neuron.weights[1];
-
+	second_layer->neurons[j].value += first_layer->neurons[i].value * first_layer->neurons[i].weights[j];
 	return;
 }
 
-void main_function(const char* content)
+Layer* initialize_layer(int size)
 {
-	Layer* starting_layer = (Layer*)malloc(sizeof(Layer));
-	Layer* last_layer = (Layer*)malloc(sizeof(Layer));
-
-	if (starting_layer == NULL || last_layer == NULL)
+	Layer* layer = (Layer*)malloc(sizeof(Layer));
+	if (layer == NULL)
 	{
 		printf("Malloc error!\n");
-		return;
+		return NULL;
 	}
 
-	// ----------------------------------------------------
-
-	starting_layer->neurons = (Neuron*)malloc(sizeof(Neuron) * 4);
-	last_layer->neurons = (Neuron*)malloc(sizeof(Neuron) * 2);
-
-	if (starting_layer->neurons == NULL || last_layer->neurons == NULL)
+	layer->neurons = (Neuron*)malloc(sizeof(Neuron) * size);
+	if (layer->neurons == NULL)
 	{
 		printf("Malloc error!\n");
-		return;
+		return NULL;
 	}
 
-	last_layer->neurons[0].value = 0.0;
-	last_layer->neurons[1].value = 0.0;
+	layer->neurons_len = size;
+	for (int i = 0; i < size; i++)
+	{
+		layer->neurons[i].value = 0.0;
+		layer->neurons[i].weights = NULL;
+		layer->neurons[i].weights_len = 0;
+	}
 
-	last_layer->neurons[0].weights = NULL;
-	last_layer->neurons[1].weights = NULL;
+	return layer;
+}
 
-	last_layer->neurons[0].connected_to = NULL;
-	last_layer->neurons[1].connected_to = NULL;
-
-	for (size_t i = 0; i < strlen(content); i++)
+void assign_starting_layer(Layer* layer, const char* content)
+{
+	for (size_t i = 0; i < layer->neurons_len; i++)
 	{
 		float weight1 = (i == 0 || i == 3) ? 0.5 : -0.5;
 		float weight2 = (i == 0 || i == 3) ? -0.5 : 0.5;
 
-		Neuron neuron = { 0 };
-		neuron.value = float(content[i]);
+		layer->neurons[i].value = float(content[i]);
 
-		neuron.weights = (float*)malloc(sizeof(float) * 2);
-		neuron.weights[0] = weight1; neuron.weights[1] = weight2;
+		layer->neurons[i].weights = (float*)malloc(sizeof(float) * 2);
+		if (layer->neurons[i].weights == NULL)
+		{
+			printf("Malloc error!\n");
 
-		neuron.connected_to = (Neuron*)malloc(sizeof(Neuron) * 2);
-		neuron.connected_to[0] = last_layer->neurons[0];  neuron.connected_to[1] = last_layer->neurons[1];
+			layer->neurons[i].value = 0.0;
+			return;
+		}
 
-		starting_layer->neurons[i] = neuron;
+		layer->neurons[i].weights_len = 2;
+
+		layer->neurons[i].weights[0] = weight1;
+		layer->neurons[i].weights[1] = weight2;
+	}
+}
+
+void multiply_layer(Layer* first_layer, Layer* second_layer)
+{
+	for (size_t i = 0; i < first_layer->neurons_len; i++)
+	{
+		for (size_t j = 0; j < second_layer->neurons_len; j++)
+		{
+			second_layer->neurons[j].value += first_layer->neurons[i].value * first_layer->neurons[i].weights[j];
+		}
+	}
+}
+
+void multiply_layer_cuda(Layer* first_layer, Layer* second_layer)
+{
+	Layer* cuda_first_layer = { 0 };
+	Layer* cuda_second_layer = { 0 };
+
+	cudaMalloc(&cuda_first_layer, sizeof(Layer));
+	cudaMalloc(&cuda_second_layer, sizeof(Layer));
+
+	cudaMemcpy(cuda_first_layer, first_layer, sizeof(Layer), cudaMemcpyHostToDevice);
+	cudaMemcpy(cuda_second_layer, second_layer, sizeof(Layer), cudaMemcpyHostToDevice);
+
+	multiplyLayers <<< 1, first_layer->neurons_len, second_layer->neurons_len >>> (cuda_first_layer, cuda_second_layer);
+	cudaMemcpy(second_layer, cuda_second_layer, sizeof(Layer), cudaMemcpyDeviceToHost);
+
+	cudaFree(cuda_first_layer);
+	cudaFree(cuda_second_layer);
+}
+
+void main_function(const char* content)
+{
+	Layer* network[LAYERS_IN_NETWORK];
+
+	network[0] = initialize_layer(4);
+	if (network[0] == NULL)
+	{
+		return;
 	}
 
-	// ----------------------------------------------------
-
-	Layer* cuda_starting_layer;
-	Layer* cuda_last_layer;
-
-	cudaMalloc(&cuda_starting_layer, sizeof(Layer));
-	cudaMalloc(&cuda_last_layer, sizeof(Layer));
-
-	cudaMemcpy(cuda_starting_layer, starting_layer, sizeof(Layer), cudaMemcpyHostToDevice);
-	cudaMemcpy(cuda_last_layer, last_layer, sizeof(Layer), cudaMemcpyHostToDevice);
-
-	/* for (size_t i = 0; i < 4; i++)
+	network[1] = initialize_layer(2);
+	if (network[1] == NULL)
 	{
-		Neuron neuron = starting_layer->neurons[i];
+		return;
+	}
 
-		last_layer->neurons[0].value += neuron.value * neuron.weights[0];
-		last_layer->neurons[1].value += neuron.value * neuron.weights[1];
-	} */
+	assign_starting_layer(network[0], content);
 
-	multiplyLayers <<< 1, 4 >>> (cuda_starting_layer, cuda_last_layer);
-	cudaMemcpy(last_layer, cuda_last_layer, sizeof(Layer), cudaMemcpyDeviceToHost);
+	for (size_t i = 0; i < LAYERS_IN_NETWORK - 1; i++) // do not multiply last layer
+	{
+		// multiply_layer(network[i], network[i + 1]);
+		multiply_layer_cuda(network[i], network[i + 1]);
+	}
 
-	// ----------------------------------------------------
-
-	if (last_layer->neurons[0].value == 1)
+	if (network[1]->neurons[0].value == 1)
 	{
 		printf("Left white diagonal.\n");
 	}
 
-	else if (last_layer->neurons[1].value == 1)
+	else if (network[1]->neurons[1].value == 1)
 	{
 		printf("Right white diagonal.\n");
 	}
@@ -120,22 +151,14 @@ void main_function(const char* content)
 		printf("No diagonal.\n");
 	}
 
-	printf("Neuron 0: %.2f\n", last_layer->neurons[0].value);
-	printf("Neuron 0: %.2f\n", last_layer->neurons[1].value);
+	printf("Neuron 0: %.2f\n", network[1]->neurons[0].value);
+	printf("Neuron 0: %.2f\n", network[1]->neurons[1].value);
 
-	// ----------------------------------------------------
+	free(network[0]->neurons);
+	free(network[1]->neurons);
 
-	for (size_t i = 0; i < 4; i++)
-	{
-		free(starting_layer->neurons[i].weights);
-		free(starting_layer->neurons[i].connected_to);
-	}
-
-	free(starting_layer->neurons);
-	free(last_layer->neurons);
-
-	free(starting_layer);
-	free(last_layer);
+	free(network[0]);
+	free(network[1]);
 }
 
 int main(int argc, char* argv[])
