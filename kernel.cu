@@ -23,6 +23,19 @@ typedef struct layer_T
 	size_t neurons_len;
 } Layer;
 
+__global__ void multiply_layer_kernel(float* input_values, float* input_weights, size_t input_neurons_len,
+	float* output_values, size_t output_neurons_len)
+{
+	int j = blockIdx.x * blockDim.x + threadIdx.x;
+	if (j < output_neurons_len)
+	{
+		for (size_t i = 0; i < input_neurons_len; ++i)
+		{
+			output_values[j] += input_values[i] * input_weights[i * output_neurons_len + j];
+		}
+	}
+}
+
 Layer* initialize_layer(int size)
 {
 	Layer* layer = (Layer*)malloc(sizeof(Layer));
@@ -79,6 +92,66 @@ void multiply_layer(Layer* first_layer, Layer* second_layer)
 	}
 }
 
+void multiply_layer_cuda(Layer* first_layer, Layer* second_layer)
+{
+	size_t input_neurons_len = first_layer->neurons_len;
+	size_t output_neurons_len = second_layer->neurons_len;
+
+	// Allocate host-side flat arrays
+	float* h_input_values = (float*)malloc(sizeof(float) * input_neurons_len);
+	float* h_input_weights = (float*)malloc(sizeof(float) * input_neurons_len * output_neurons_len);
+	float* h_output_values = (float*)malloc(sizeof(float) * output_neurons_len);
+
+	// Fill host arrays
+	for (size_t i = 0; i < input_neurons_len; ++i)
+	{
+		h_input_values[i] = first_layer->neurons[i].value;
+		for (size_t j = 0; j < output_neurons_len; ++j)
+		{
+			h_input_weights[i * output_neurons_len + j] = first_layer->neurons[i].weights[j];
+		}
+	}
+
+	for (size_t j = 0; j < output_neurons_len; ++j)
+	{
+		h_output_values[j] = second_layer->neurons[j].value;
+	}
+
+	// Allocate device memory
+	float* d_input_values, * d_input_weights, * d_output_values;
+	cudaMalloc(&d_input_values, sizeof(float) * input_neurons_len);
+	cudaMalloc(&d_input_weights, sizeof(float) * input_neurons_len * output_neurons_len);
+	cudaMalloc(&d_output_values, sizeof(float) * output_neurons_len);
+
+	// Copy to device
+	cudaMemcpy(d_input_values, h_input_values, sizeof(float) * input_neurons_len, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_input_weights, h_input_weights, sizeof(float) * input_neurons_len * output_neurons_len, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_output_values, h_output_values, sizeof(float) * output_neurons_len, cudaMemcpyHostToDevice);
+
+	// Launch kernel
+	int threads_per_block = 256;
+	int blocks_per_grid = (output_neurons_len + threads_per_block - 1) / threads_per_block;
+	multiply_layer_kernel <<< blocks_per_grid, threads_per_block >> > (d_input_values, d_input_weights, input_neurons_len, d_output_values, output_neurons_len);
+
+	// Copy results back
+	cudaMemcpy(h_output_values, d_output_values, sizeof(float) * output_neurons_len, cudaMemcpyDeviceToHost);
+
+	// Update second layer values
+	for (size_t j = 0; j < output_neurons_len; ++j)
+	{
+		second_layer->neurons[j].value = h_output_values[j];
+	}
+
+	// Cleanup
+	free(h_input_values);
+	free(h_input_weights);
+	free(h_output_values);
+
+	cudaFree(d_input_values);
+	cudaFree(d_input_weights);
+	cudaFree(d_output_values);
+}
+
 void main_function(int* content)
 {
 	Layer* network[LAYERS_IN_NETWORK];
@@ -99,7 +172,7 @@ void main_function(int* content)
 
 	for (size_t i = 0; i < LAYERS_IN_NETWORK - 1; i++) // do not multiply last layer
 	{
-		multiply_layer(network[i], network[i + 1]);
+		multiply_layer_cuda(network[i], network[i + 1]);
 	}
 
 	if (network[1]->neurons[0].value == 1)
