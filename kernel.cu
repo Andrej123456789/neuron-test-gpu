@@ -2,6 +2,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,15 +23,6 @@ typedef struct layer_T
 	size_t neurons_len;
 } Layer;
 
-__global__ void multiplyLayers(Layer* first_layer, Layer* second_layer)
-{
-	int i = threadIdx.x;
-	int j = threadIdx.y;
-
-	second_layer->neurons[j].value += first_layer->neurons[i].value * first_layer->neurons[i].weights[j];
-	return;
-}
-
 Layer* initialize_layer(int size)
 {
 	Layer* layer = (Layer*)malloc(sizeof(Layer));
@@ -40,7 +32,7 @@ Layer* initialize_layer(int size)
 		return NULL;
 	}
 
-	layer->neurons = (Neuron*)malloc(sizeof(Neuron) * size);
+	layer->neurons = (Neuron*)calloc(size, sizeof(Neuron));
 	if (layer->neurons == NULL)
 	{
 		printf("Malloc error!\n");
@@ -48,17 +40,10 @@ Layer* initialize_layer(int size)
 	}
 
 	layer->neurons_len = size;
-	for (int i = 0; i < size; i++)
-	{
-		layer->neurons[i].value = 0.0;
-		layer->neurons[i].weights = NULL;
-		layer->neurons[i].weights_len = 0;
-	}
-
 	return layer;
 }
 
-void assign_starting_layer(Layer* layer, const char* content)
+void assign_starting_layer(Layer* layer, int* content)
 {
 	for (size_t i = 0; i < layer->neurons_len; i++)
 	{
@@ -67,7 +52,7 @@ void assign_starting_layer(Layer* layer, const char* content)
 
 		layer->neurons[i].value = float(content[i]);
 
-		layer->neurons[i].weights = (float*)malloc(sizeof(float) * 2);
+		layer->neurons[i].weights = (float*)calloc(2, sizeof(float));
 		if (layer->neurons[i].weights == NULL)
 		{
 			printf("Malloc error!\n");
@@ -94,25 +79,7 @@ void multiply_layer(Layer* first_layer, Layer* second_layer)
 	}
 }
 
-void multiply_layer_cuda(Layer* first_layer, Layer* second_layer)
-{
-	Layer* cuda_first_layer = { 0 };
-	Layer* cuda_second_layer = { 0 };
-
-	cudaMalloc(&cuda_first_layer, sizeof(Layer));
-	cudaMalloc(&cuda_second_layer, sizeof(Layer));
-
-	cudaMemcpy(cuda_first_layer, first_layer, sizeof(Layer), cudaMemcpyHostToDevice);
-	cudaMemcpy(cuda_second_layer, second_layer, sizeof(Layer), cudaMemcpyHostToDevice);
-
-	multiplyLayers <<< 1, first_layer->neurons_len, second_layer->neurons_len >>> (cuda_first_layer, cuda_second_layer);
-	cudaMemcpy(second_layer, cuda_second_layer, sizeof(Layer), cudaMemcpyDeviceToHost);
-
-	cudaFree(cuda_first_layer);
-	cudaFree(cuda_second_layer);
-}
-
-void main_function(const char* content)
+void main_function(int* content)
 {
 	Layer* network[LAYERS_IN_NETWORK];
 
@@ -132,8 +99,7 @@ void main_function(const char* content)
 
 	for (size_t i = 0; i < LAYERS_IN_NETWORK - 1; i++) // do not multiply last layer
 	{
-		// multiply_layer(network[i], network[i + 1]);
-		multiply_layer_cuda(network[i], network[i + 1]);
+		multiply_layer(network[i], network[i + 1]);
 	}
 
 	if (network[1]->neurons[0].value == 1)
@@ -154,6 +120,11 @@ void main_function(const char* content)
 	printf("Neuron 0: %.2f\n", network[1]->neurons[0].value);
 	printf("Neuron 0: %.2f\n", network[1]->neurons[1].value);
 
+	for (size_t i = 0; i < network[0]->neurons_len; i++)
+	{
+		free(network[0]->neurons[i].weights);
+	}
+
 	free(network[0]->neurons);
 	free(network[1]->neurons);
 
@@ -164,13 +135,7 @@ void main_function(const char* content)
 int main(int argc, char* argv[])
 {
 	char path[256];
-	char* content = (char*)malloc(sizeof(char) * DEFAULT_SIZE);
-
-	if (content == NULL)
-	{
-		printf("Malloc error!\n");
-		return 0;
-	}
+	int content[4];
 
 	printf("--------------------\n");
 	printf("GPU neuron network test\n");
@@ -185,7 +150,7 @@ int main(int argc, char* argv[])
 	else
 	{
 		strncpy(path, argv[1], 255);
-		path[256] = '\0';
+		path[255] = '\0';
 	}
 
 	FILE* file;
@@ -200,41 +165,15 @@ int main(int argc, char* argv[])
 	}
 
 	char c;
-	int i = -1;
+	int i = 0;
 
 	while ((c = fgetc(file)) != EOF)
 	{
-		if (c != ' ' && c != '\n')
+		if (isdigit(c))
 		{
-			i++;
-			if (i >= DEFAULT_SIZE)
-			{
-				char* temp = (char*)malloc(sizeof(char) * (i - 1) + 1);
-				if (temp == NULL)
-				{
-					printf("Malloc error!\n");
-					exit(0);
-				}
-
-				strcpy(temp, content);
-
-				content = (char*)realloc(content, sizeof(char) * i + 1); // +1 for \0 below
-				if (content == NULL)
-				{
-					printf("Malloc error!\n");
-					exit(0);
-				}
-
-				strcpy(content, temp);
-				free(temp);
-			}
-
-			content[i] = c;
+			content[i++] = c - '0';
 		}
 	}
 
-	content[i + 1] = '\0';
-
 	main_function(content);
-	free(content);
 }
